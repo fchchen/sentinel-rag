@@ -15,6 +15,33 @@ It sits between clients and LLM providers, applying policy controls before infer
 - Async eval job orchestration with Celery, retries, requeue, and dead-letter capture
 - Tenant quota controls for evaluation spend and monthly LLM budget enforcement
 
+## Screenshots
+
+### Live Dashboard
+
+Real API data — authenticated tenant session, mixed document states, retrieval runs with query text and ranked hits, eval jobs processed by the Celery worker, and a non-zero provider cost breakdown.
+
+![sentinel-rag live dashboard](docs/screenshots/dashboard-live-desktop.png)
+
+The dashboard surfaces six operator panels:
+
+| Panel | What it shows |
+|---|---|
+| **Tenant Inventory** | Documents with lifecycle status — `ACTIVE`, `PENDING`, `QUARANTINED` |
+| **Recent Search Runs** | Retrieval queries, hit counts, and run IDs |
+| **Recent Eval Results** | Faithfulness scores and judge version per retrieval run |
+| **Eval Job States** | Queue depth with `COMPLETED` / `RETRY` / `FAILED` badges |
+| **Dead Letters** | Unrecoverable eval jobs with payload inspect and requeue action |
+| **Model Spend** | Per-provider cost breakdown with running total |
+
+### Backend API
+
+Full Swagger UI showing all 16 endpoints across 9 route groups. Lock icons indicate auth-protected routes; method badges show the HTTP verb.
+
+![sentinel-rag backend API docs](docs/screenshots/backend-swagger.png)
+
+Route groups: `health` · `auth` · `audit` · `documents` · `evals` · `metrics` · `policy` · `retrieval` · `gateway`
+
 ## Current Status
 
 This repository is a serious working prototype, not a finished production deployment.
@@ -35,46 +62,36 @@ What is intentionally still incomplete:
 
 ## Repository Layout
 
-- `backend/` FastAPI app, core services, Celery tasks, tests, and Alembic baseline
+- `backend/` FastAPI app, core services, Celery tasks, and tests
 - `frontend/` React dashboard
 - `infra/` local Docker Compose for Postgres and Redis
 - `docs/` consolidated spec and implementation checklist
-- `memory/` daily implementation notes
 
 ## Key Docs
 
 - `docs/sentinel-rag-spec-v2-consolidated.md`
 - `docs/implementation-checklist.md`
 
-The original `.docx` blueprint and addendum are also kept in the repository as source material.
-
-## Screenshots
-
-### Live Dashboard (Desktop)
-
-![sentinel-rag live dashboard desktop](docs/screenshots/dashboard-live-desktop.png)
-
-### Live Dashboard (Mobile)
-
-![sentinel-rag live dashboard mobile](docs/screenshots/dashboard-live-mobile.png)
-
-### Backend API Docs
-
-![sentinel-rag backend swagger](docs/screenshots/backend-swagger.png)
-
 ## Local Development
+
+### Infrastructure
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
 
 ### Backend
 
 ```bash
 cd backend
-../.venv/bin/python -m uvicorn main:app --reload
+uv run uvicorn main:app --reload
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
 
@@ -82,30 +99,21 @@ npm run dev
 
 ```bash
 cd backend
-../.venv/bin/python -m pytest tests -q
-```
-
-### Local Infrastructure
-
-```bash
-docker compose -f infra/docker-compose.yml up -d
+uv run pytest
 ```
 
 The default local mode is intentionally safe:
 
-- `GATEWAY_PROVIDER_MODE=stub`
-- `AUTH_VERIFIER_MODE=local`
+- `GATEWAY_PROVIDER_MODE=stub` — no live LLM credentials required
+- `AUTH_VERIFIER_MODE=local` — bearer tokens issued by `POST /api/v1/auth/demo`
 
-That means you can run the project without live Azure/OpenAI/Anthropic credentials until you explicitly opt in.
+## Discussion Topics
 
-## Interview Framing
+This project is well suited for backend and systems-design discussions around:
 
-This project is well suited for backend and systems-design discussions:
-
-- multi-tenant service boundaries
-- governance and policy enforcement around LLM usage
-- async worker reliability patterns
-- persistence and auditability tradeoffs
-- progressive hardening of an AI platform prototype
-
-It is best presented honestly as a tested, evolving platform slice with clear production extension points rather than as a fully finished enterprise product.
+- multi-tenant service boundaries and per-tenant policy enforcement
+- governance and auditability controls for LLM usage
+- async worker reliability patterns — retries, dead letters, requeue
+- hybrid retrieval: vector similarity + keyword ranking on the same corpus
+- circuit-breaker routing across heterogeneous LLM providers
+- progressive hardening of an AI platform prototype toward production

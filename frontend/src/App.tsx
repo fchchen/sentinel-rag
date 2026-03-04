@@ -351,14 +351,6 @@ export default function App() {
           </article>
         ))}
       </section>
-      <section className="notes">
-        <h2>Next build targets</h2>
-        <ul>
-          <li>Swap heuristic embeddings for model-backed production vectors.</li>
-          <li>Replace heuristic eval scoring with async LLM-as-judge execution.</li>
-          <li>Add operator actions for scan retries and document quarantine review.</li>
-        </ul>
-      </section>
       <section className="data-panels" aria-label="Stored documents and retrieval runs">
         <article className="data-card">
           <div className="panel-header">

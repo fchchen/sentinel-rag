@@ -148,12 +148,8 @@ class StubLLMProviderClient:
             provider=provider.provider,
             model=provider.model,
             completion=f"stubbed:{provider.provider}:{prompt}",
-            prompt_tokens=max(1, len(prompt) // 4 + (1 if len(prompt) % 4 else 0)),
-            completion_tokens=max(
-                1,
-                len(f"stubbed:{provider.provider}:{prompt}") // 4
-                + (1 if len(f"stubbed:{provider.provider}:{prompt}") % 4 else 0),
-            ),
+            prompt_tokens=max(150, len(prompt) // 4),
+            completion_tokens=max(250, len(f"stubbed:{provider.provider}:{prompt}") // 4),
         )
 
 
