@@ -48,6 +48,20 @@ What is intentionally still incomplete:
 
 The original `.docx` blueprint and addendum are also kept in the repository as source material.
 
+## Screenshots
+
+### Live Dashboard (Desktop)
+
+![sentinel-rag live dashboard desktop](docs/screenshots/dashboard-live-desktop.png)
+
+### Live Dashboard (Mobile)
+
+![sentinel-rag live dashboard mobile](docs/screenshots/dashboard-live-mobile.png)
+
+### Backend API Docs
+
+![sentinel-rag backend swagger](docs/screenshots/backend-swagger.png)
+
 ## Local Development
 
 ### Backend
