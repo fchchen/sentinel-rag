@@ -77,3 +77,25 @@ async def test_malware_scan_result_sets_quarantined_in_persisted_model() -> None
     assert list_response.status_code == 200
     items = list_response.json()["items"]
     assert items[0]["status"] == "QUARANTINED"
+
+
+@pytest.mark.anyio
+async def test_missing_document_scan_result_returns_404() -> None:
+    service = _document_service()
+
+    async def override_document_service() -> DocumentService:
+        return service
+
+    app.dependency_overrides[get_document_service] = override_document_service
+    try:
+        response = await request(
+            "POST",
+            "/api/v1/documents/missing-doc/scan-result",
+            headers=auth_headers(roles=["admin"], tenant_id=TENANT_A),
+            json_body={"result": "clean"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Document not found"

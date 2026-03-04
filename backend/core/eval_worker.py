@@ -28,7 +28,16 @@ class InlineEvalWorker:
         self._evaluation_service = evaluation_service
 
     def dispatch_job(self, job_id: int) -> EvalDispatchResult:
-        processed = 1 if self._evaluation_service.process_job(job_id=job_id) else 0
+        handle = self._evaluation_service.get_dispatch_handle(job_id=job_id)
+        processed = (
+            1
+            if handle
+            and self._evaluation_service.process_job(
+                job_id=handle.job_id,
+                worker_token=handle.worker_token,
+            )
+            else 0
+        )
         return EvalDispatchResult(
             mode="inline",
             queued=False,
@@ -50,7 +59,7 @@ class CeleryEvalWorker:
     def __init__(
         self,
         *,
-        submit_job: Callable[[int], AsyncResult] | None = None,
+        submit_job: Callable[[int, str], AsyncResult] | None = None,
         submit_pending: Callable[[int], AsyncResult] | None = None,
         evaluation_service: EvaluationService | None = None,
     ) -> None:
@@ -65,10 +74,17 @@ class CeleryEvalWorker:
         self._evaluation_service = evaluation_service or EvaluationService()
 
     def dispatch_job(self, job_id: int) -> EvalDispatchResult:
+        handle = self._evaluation_service.get_dispatch_handle(job_id=job_id)
+        if handle is None:
+            return EvalDispatchResult(mode="celery", queued=False, processed=0, task_id=None)
         try:
-            result = self._submit_job(job_id)
+            result = self._submit_job(handle.job_id, handle.worker_token)
         except OperationalError as exc:
-            self._evaluation_service.record_dispatch_failure(job_id=job_id, error=str(exc))
+            self._evaluation_service.record_dispatch_failure(
+                job_id=handle.job_id,
+                worker_token=handle.worker_token,
+                error=str(exc),
+            )
             return EvalDispatchResult(mode="celery", queued=False, processed=0, task_id=None)
         return EvalDispatchResult(mode="celery", queued=True, processed=0, task_id=result.id)
 

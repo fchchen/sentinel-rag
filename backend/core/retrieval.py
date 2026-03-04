@@ -1,11 +1,27 @@
 from dataclasses import dataclass
 from functools import lru_cache
 
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from core.db import Document, DocumentChunk, RetrievalResult, RetrievalRun, bootstrap_schema, get_engine
-from core.embeddings import build_chunks, cosine_similarity, deserialize_embedding, embed_text, normalize_terms
+from core.db import (
+    Document,
+    DocumentChunk,
+    RetrievalResult,
+    RetrievalRun,
+    bootstrap_schema,
+    get_engine,
+    sync_pgvector_chunk_features,
+)
+from core.embeddings import (
+    build_chunks,
+    cosine_similarity,
+    deserialize_embedding,
+    embed_text,
+    normalize_terms,
+    to_pgvector_literal,
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +53,57 @@ class RetrievalService:
     def __init__(self, engine: Engine | None = None) -> None:
         self._engine = engine or get_engine()
         bootstrap_schema(engine=self._engine)
+
+    @staticmethod
+    def native_vector_search_sql() -> str:
+        return """
+WITH ranked_chunks AS (
+    SELECT
+        d.id AS document_id,
+        d.filename AS filename,
+        d.created_at AS document_created_at,
+        c.content_text AS chunk_text,
+        ROW_NUMBER() OVER (
+            PARTITION BY d.id
+            ORDER BY
+                (
+                    COALESCE(1 - (c.embedding_pg <=> CAST(:query_vector AS vector)), 0.0) * 0.70
+                ) +
+                (
+                    COALESCE(ts_rank_cd(c.fts_tsv, plainto_tsquery('simple', :query_text)), 0.0) * 0.30
+                ) DESC,
+                c.chunk_index ASC
+        ) AS chunk_rank,
+        (
+            COALESCE(1 - (c.embedding_pg <=> CAST(:query_vector AS vector)), 0.0) * 0.70
+        ) +
+        (
+            COALESCE(ts_rank_cd(c.fts_tsv, plainto_tsquery('simple', :query_text)), 0.0) * 0.25
+        ) +
+        (
+            CASE
+                WHEN position(lower(:query_text) in lower(d.filename)) > 0 THEN 0.05
+                ELSE 0.0
+            END
+        ) AS blended_score
+    FROM documents d
+    LEFT JOIN document_chunks c ON c.document_id = d.id
+    WHERE d.tenant_id = :tenant_id
+      AND d.status = 'ACTIVE'
+)
+SELECT
+    document_id,
+    COALESCE(chunk_text, filename || ' matched query: ' || :query_text) AS snippet,
+    CAST(
+        GREATEST(
+            1,
+            LEAST(100, ROUND(COALESCE(blended_score, 0.0) * 100))
+        ) AS INTEGER
+    ) AS score
+FROM ranked_chunks
+WHERE chunk_rank = 1 OR chunk_rank IS NULL
+ORDER BY score DESC, document_created_at ASC
+""".strip()
 
     def create_document(
         self,
@@ -70,6 +137,7 @@ class RetrievalService:
                     )
                 )
             session.commit()
+            sync_pgvector_chunk_features(engine=self._engine, document_id=document.id)
             session.refresh(document)
             return document
 
@@ -83,38 +151,12 @@ class RetrievalService:
             session.add(run)
             session.flush()
 
-            documents = (
-                session.query(Document)
-                .filter(Document.tenant_id == tenant_id, Document.status == "ACTIVE")
-                .all()
+            result_views = self._retrieve_ranked_results(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run.id,
+                query=query,
             )
-            chunk_map = self._load_chunks(session=session, documents=documents)
-            ranked_documents = sorted(
-                documents,
-                key=lambda document: (-self._score_document(document, query, chunk_map.get(document.id, [])), document.created_at),
-            )
-            result_views: list[RetrievalResultView] = []
-            for index, document in enumerate(ranked_documents, start=1):
-                chunks = chunk_map.get(document.id, [])
-                score = self._score_document(document, query, chunks)
-                snippet = self._build_snippet(document=document, query=query, chunks=chunks)
-                session.add(
-                    RetrievalResult(
-                        retrieval_run_id=run.id,
-                        document_id=document.id,
-                        rank=index,
-                        score=score,
-                        snippet=snippet,
-                    )
-                )
-                result_views.append(
-                    RetrievalResultView(
-                        document_id=document.id,
-                        rank=index,
-                        score=score,
-                        snippet=snippet,
-                    )
-                )
 
             session.commit()
             return RetrievalRunView(
@@ -149,6 +191,114 @@ class RetrievalService:
                     )
                 )
             return summaries
+
+    def _retrieve_ranked_results(
+        self,
+        *,
+        session: Session,
+        tenant_id: str,
+        run_id: str,
+        query: str,
+    ) -> list[RetrievalResultView]:
+        if self._should_use_native_vector_search(query=query):
+            return self._retrieve_native_ranked_results(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                query=query,
+            )
+        return self._retrieve_fallback_ranked_results(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            query=query,
+        )
+
+    def _should_use_native_vector_search(self, *, query: str) -> bool:
+        return self._engine.dialect.name == "postgresql" and bool(query.strip())
+
+    def _retrieve_native_ranked_results(
+        self,
+        *,
+        session: Session,
+        tenant_id: str,
+        run_id: str,
+        query: str,
+    ) -> list[RetrievalResultView]:
+        rows = session.execute(
+            text(self.native_vector_search_sql()),
+            {
+                "tenant_id": tenant_id,
+                "query_text": query,
+                "query_vector": to_pgvector_literal(embed_text(query)),
+            },
+        ).mappings()
+
+        result_views: list[RetrievalResultView] = []
+        for index, row in enumerate(rows, start=1):
+            score = int(row["score"])
+            snippet = str(row["snippet"])
+            document_id = str(row["document_id"])
+            session.add(
+                RetrievalResult(
+                    retrieval_run_id=run_id,
+                    document_id=document_id,
+                    rank=index,
+                    score=score,
+                    snippet=snippet,
+                )
+            )
+            result_views.append(
+                RetrievalResultView(
+                    document_id=document_id,
+                    rank=index,
+                    score=score,
+                    snippet=snippet,
+                )
+            )
+        return result_views
+
+    def _retrieve_fallback_ranked_results(
+        self,
+        *,
+        session: Session,
+        tenant_id: str,
+        run_id: str,
+        query: str,
+    ) -> list[RetrievalResultView]:
+        documents = (
+            session.query(Document)
+            .filter(Document.tenant_id == tenant_id, Document.status == "ACTIVE")
+            .all()
+        )
+        chunk_map = self._load_chunks(session=session, documents=documents)
+        ranked_documents = sorted(
+            documents,
+            key=lambda document: (-self._score_document(document, query, chunk_map.get(document.id, [])), document.created_at),
+        )
+        result_views: list[RetrievalResultView] = []
+        for index, document in enumerate(ranked_documents, start=1):
+            chunks = chunk_map.get(document.id, [])
+            score = self._score_document(document, query, chunks)
+            snippet = self._build_snippet(document=document, query=query, chunks=chunks)
+            session.add(
+                RetrievalResult(
+                    retrieval_run_id=run_id,
+                    document_id=document.id,
+                    rank=index,
+                    score=score,
+                    snippet=snippet,
+                )
+            )
+            result_views.append(
+                RetrievalResultView(
+                    document_id=document.id,
+                    rank=index,
+                    score=score,
+                    snippet=snippet,
+                )
+            )
+        return result_views
 
     def _load_chunks(self, *, session: Session, documents: list[Document]) -> dict[str, list[DocumentChunk]]:
         if not documents:

@@ -1,4 +1,5 @@
 import time
+from uuid import uuid4
 
 import pytest
 
@@ -48,15 +49,41 @@ async def test_service_account_cannot_access_logs() -> None:
 
 @pytest.mark.anyio
 async def test_tenant_isolation_reader_cannot_see_other_tenant_logs() -> None:
+    other_tenant = "22222222-2222-2222-2222-222222222222"
+    first_gateway = await request(
+        "POST",
+        "/api/v1/gateway/complete",
+        headers=auth_headers(tenant_id=TENANT_A, roles=["reader"]),
+        json_body={
+            "prompt": "tenant a request",
+            "provider": "auto",
+            "max_tokens": 100,
+            "context": {"tenant_id": TENANT_A, "app_id": "console", "trace_id": str(uuid4())},
+        },
+    )
+    second_gateway = await request(
+        "POST",
+        "/api/v1/gateway/complete",
+        headers=auth_headers(tenant_id=other_tenant, roles=["reader"]),
+        json_body={
+            "prompt": "tenant b request",
+            "provider": "auto",
+            "max_tokens": 100,
+            "context": {"tenant_id": other_tenant, "app_id": "console", "trace_id": str(uuid4())},
+        },
+    )
     response = await request(
         "GET",
         "/api/v1/audit/logs",
         headers=auth_headers(tenant_id=TENANT_A, roles=["reader"]),
     )
 
+    assert first_gateway.status_code == 200
+    assert second_gateway.status_code == 200
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["items"]) == 2
+    assert len(payload["items"]) == 1
+    assert payload["count"] == 1
     assert {item["tenant_id"] for item in payload["items"]} == {TENANT_A}
 
 

@@ -43,6 +43,7 @@ class EvalDeadLetterItemResponse(BaseModel):
     id: int
     job_id: int | None
     task_name: str
+    payload_json: str
     error_message: str
     retry_count: int
     created_at: datetime
@@ -164,6 +165,7 @@ def _to_eval_dead_letter_item(item: EvalDeadLetterView) -> EvalDeadLetterItemRes
         id=item.id,
         job_id=item.job_id,
         task_name=item.task_name,
+        payload_json=item.payload_json,
         error_message=item.error_message,
         retry_count=item.retry_count,
         created_at=item.created_at,

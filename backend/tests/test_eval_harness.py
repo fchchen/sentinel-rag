@@ -34,7 +34,7 @@ def _services() -> tuple[AuditService, RetrievalService, EvaluationService, obje
 
 
 @pytest.mark.anyio
-async def test_gateway_dispatches_eval_worker_and_persists_eval_result() -> None:
+async def test_judge_prompt_version_stored_with_eval_result() -> None:
     audit, retrieval, evaluation, engine = _services()
 
     async def override_audit() -> AuditService:
@@ -71,4 +71,4 @@ async def test_gateway_dispatches_eval_worker_and_persists_eval_result() -> None
 
     assert len(eval_results) == 1
     assert eval_results[0].retrieval_run_id == response.json()["retrieval_run_id"]
-    assert eval_results[0].judge_version == "heuristic_v1"
+    assert eval_results[0].judge_version == "faithfulness_v1"

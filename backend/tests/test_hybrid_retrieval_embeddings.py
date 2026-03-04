@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from core.embeddings import EMBEDDING_DIMENSIONS, embed_text, to_pgvector_literal
 from core.db import DocumentChunk
 from core.documents import DocumentService
 from core.retrieval import RetrievalService
@@ -54,3 +55,19 @@ def test_chunk_embeddings_persist_and_hybrid_ranking_prefers_content_match() -> 
 
     assert [item.document_id for item in run.results] == [strong.id, weak.id]
     assert run.results[0].score > run.results[1].score
+
+
+def test_pgvector_literal_matches_vector_input_format() -> None:
+    literal = to_pgvector_literal(embed_text("billing invoice policy"))
+
+    assert literal.startswith("[")
+    assert literal.endswith("]")
+    assert literal.count(",") == EMBEDDING_DIMENSIONS - 1
+
+
+def test_native_vector_sql_uses_pgvector_and_tsvector_operators() -> None:
+    sql = RetrievalService.native_vector_search_sql()
+
+    assert "embedding_pg <=>" in sql
+    assert "plainto_tsquery" in sql
+    assert "ts_rank_cd" in sql

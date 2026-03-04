@@ -65,9 +65,11 @@ def test_eval_job_retries_then_moves_to_failed_after_max_attempts() -> None:
     bootstrap_schema(engine=engine)
     service = _FailingEvaluationService(engine=engine, max_attempts=2, retry_delay_seconds=0)
     job_id = _seed_job(service, engine)
+    handle = service.get_dispatch_handle(job_id=job_id)
 
-    first = service.process_job(job_id=job_id)
-    second = service.process_job(job_id=job_id)
+    assert handle is not None
+    first = service.process_job(job_id=job_id, worker_token=handle.worker_token)
+    second = service.process_job(job_id=job_id, worker_token=handle.worker_token)
 
     assert first is None
     assert second is None
@@ -80,3 +82,25 @@ def test_eval_job_retries_then_moves_to_failed_after_max_attempts() -> None:
     assert job.attempt_count == 2
     assert job.last_error == "judge timeout"
     assert job.next_attempt_at is None
+
+
+def test_process_job_ignores_incorrect_worker_token() -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    bootstrap_schema(engine=engine)
+    service = EvaluationService(engine=engine, retry_delay_seconds=0)
+    job_id = _seed_job(service, engine)
+
+    result = service.process_job(job_id=job_id, worker_token="wrong-token")
+
+    assert result is None
+
+    with Session(engine) as session:
+        job = session.get(EvalJob, job_id)
+
+    assert job is not None
+    assert job.status == "PENDING"
+    assert job.attempt_count == 0

@@ -18,6 +18,7 @@ def handle_task_failure(
 ) -> None:
     service = evaluation_service or EvaluationService()
     job_id = _extract_job_id(task_name=task_name, args=args, kwargs=kwargs)
+    worker_token = _extract_worker_token(task_name=task_name, args=args, kwargs=kwargs)
     with suppress(Exception):
         service.record_dead_letter(
             job_id=job_id,
@@ -28,7 +29,8 @@ def handle_task_failure(
         )
     if job_id is not None:
         with suppress(Exception):
-            service.mark_job_failed(job_id=job_id, error=str(exc))
+            if worker_token is not None:
+                service.mark_job_failed(job_id=job_id, worker_token=worker_token, error=str(exc))
 
 
 class EvalTaskBase(Task):
@@ -49,9 +51,9 @@ class EvalTaskBase(Task):
 
 
 @celery_app.task(name="sentinel_rag.process_eval_job", bind=True, base=EvalTaskBase)
-def process_eval_job_task(self, job_id: int) -> dict[str, object]:
+def process_eval_job_task(self, job_id: int, worker_token: str) -> dict[str, object]:
     service = EvaluationService()
-    result = service.process_job(job_id=job_id)
+    result = service.process_job(job_id=job_id, worker_token=worker_token)
     return {
         "processed": 1 if result else 0,
         "job_id": job_id,
@@ -75,4 +77,15 @@ def _extract_job_id(*, task_name: str, args: tuple[object, ...], kwargs: dict[st
     job_id = kwargs.get("job_id")
     if isinstance(job_id, int):
         return job_id
+    return None
+
+
+def _extract_worker_token(*, task_name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> str | None:
+    if not task_name.endswith("process_eval_job"):
+        return None
+    if len(args) > 1 and isinstance(args[1], str):
+        return args[1]
+    worker_token = kwargs.get("worker_token")
+    if isinstance(worker_token, str):
+        return worker_token
     return None

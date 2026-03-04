@@ -7,7 +7,7 @@ from core.audit import calculate_invocation_cost, get_audit_service
 from core.auth import AuthContext, get_auth_context
 from core.evaluation import get_evaluation_service
 from core.eval_worker import get_eval_worker
-from core.gateway import ProviderUnavailableError, get_gateway_service
+from core.gateway import InvalidProviderRequestError, ProviderUnavailableError, get_gateway_service
 from core.policy import PolicyDecision, get_policy_engine
 from core.retrieval import RetrievalResultView, get_retrieval_service
 
@@ -96,7 +96,16 @@ async def complete(
     )
 
     try:
-        result = gateway_service.complete(request.provider, request.prompt)
+        result = gateway_service.complete(
+            request.provider,
+            request.prompt,
+            max_tokens=request.max_tokens,
+        )
+    except InvalidProviderRequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     except ProviderUnavailableError as exc:
         audit_service.record_gateway_call(
             tenant_id=auth_context.tenant_id,

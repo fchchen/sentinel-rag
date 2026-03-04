@@ -57,10 +57,12 @@ def test_dead_letter_records_task_failure_and_marks_job_failed() -> None:
         completion="billing invoice summary",
         policy_decision=decision,
     )
+    handle = evaluation.get_dispatch_handle(job_id=job_id)
+    assert handle is not None
 
     handle_task_failure(
         task_name="sentinel_rag.process_eval_job",
-        args=(job_id,),
+        args=(job_id, handle.worker_token),
         kwargs={},
         exc=RuntimeError("worker crashed"),
         retry_count=3,

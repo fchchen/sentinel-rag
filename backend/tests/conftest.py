@@ -17,7 +17,7 @@ from core.db import bootstrap_schema
 from core.documents import DocumentService, _build_document_service, get_document_service
 from core.eval_worker import InlineEvalWorker, _build_eval_worker, get_eval_worker
 from core.evaluation import EvaluationService, _build_evaluation_service, get_evaluation_service
-from core.gateway import _build_gateway_service
+from core.gateway import _build_gateway_service, _build_provider_client
 from core.retrieval import RetrievalService, _build_retrieval_service, get_retrieval_service
 from main import app
 
@@ -26,13 +26,16 @@ from main import app
 def disable_startup_bootstrap() -> None:
     original = settings.bootstrap_schema_on_startup
     original_eager = settings.celery_task_always_eager
+    original_provider_mode = settings.gateway_provider_mode
     settings.bootstrap_schema_on_startup = False
     settings.celery_task_always_eager = True
+    settings.gateway_provider_mode = "stub"
     try:
         yield
     finally:
         settings.bootstrap_schema_on_startup = original
         settings.celery_task_always_eager = original_eager
+        settings.gateway_provider_mode = original_provider_mode
 
 
 @pytest.fixture(autouse=True)
@@ -124,6 +127,7 @@ def use_in_memory_evaluation_service() -> None:
 
 @pytest.fixture(autouse=True)
 def clear_cached_services() -> None:
+    _build_provider_client.cache_clear()
     _build_gateway_service.cache_clear()
     _build_document_service.cache_clear()
     _build_retrieval_service.cache_clear()
@@ -132,6 +136,7 @@ def clear_cached_services() -> None:
     try:
         yield
     finally:
+        _build_provider_client.cache_clear()
         _build_gateway_service.cache_clear()
         _build_document_service.cache_clear()
         _build_retrieval_service.cache_clear()

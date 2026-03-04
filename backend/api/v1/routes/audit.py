@@ -1,31 +1,56 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime
 
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from core.audit import AuditLogView, get_audit_service
 from core.auth import AuthContext, require_human_user
 
 router = APIRouter(tags=["audit"])
 
-_AUDIT_LOGS = [
-    {
-        "id": "log-1",
-        "tenant_id": "11111111-1111-1111-1111-111111111111",
-        "message": "Gateway request completed",
-    },
-    {
-        "id": "log-2",
-        "tenant_id": "11111111-1111-1111-1111-111111111111",
-        "message": "Policy override requested",
-    },
-    {
-        "id": "log-3",
-        "tenant_id": "22222222-2222-2222-2222-222222222222",
-        "message": "Document upload quarantined",
-    },
-]
+
+class AuditLogItemResponse(BaseModel):
+    id: str
+    tenant_id: str
+    app_id: str
+    trace_id: str | None
+    provider: str | None
+    model: str | None
+    policy_decision: str
+    created_at: datetime
 
 
-@router.get("/audit/logs")
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogItemResponse]
+    count: int
+
+
+@router.get("/audit/logs", response_model=AuditLogListResponse)
 async def list_audit_logs(
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     context: AuthContext = Depends(require_human_user),
-) -> dict[str, object]:
-    items = [log for log in _AUDIT_LOGS if log["tenant_id"] == context.tenant_id]
-    return {"items": items, "count": len(items)}
+    audit_service=Depends(get_audit_service),
+) -> AuditLogListResponse:
+    items = audit_service.list_logs(
+        tenant_id=context.tenant_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return AuditLogListResponse(
+        items=[_to_item_response(item) for item in items],
+        count=len(items),
+    )
+
+
+def _to_item_response(item: AuditLogView) -> AuditLogItemResponse:
+    return AuditLogItemResponse(
+        id=item.id,
+        tenant_id=item.tenant_id,
+        app_id=item.app_id,
+        trace_id=item.trace_id,
+        provider=item.provider,
+        model=item.model,
+        policy_decision=item.policy_decision,
+        created_at=item.created_at,
+    )

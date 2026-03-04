@@ -74,9 +74,11 @@ async def test_admin_can_list_dead_letters_and_requeue_failed_job() -> None:
             headers=auth_headers(roles=["admin"], tenant_id=TENANT_A),
         )
         job_id = jobs_response.json()["items"][0]["id"]
+        handle = evaluation.get_dispatch_handle(job_id=job_id)
+        assert handle is not None
         handle_task_failure(
             task_name="sentinel_rag.process_eval_job",
-            args=(job_id,),
+            args=(job_id, handle.worker_token),
             kwargs={},
             exc=RuntimeError("worker crashed"),
             retry_count=2,
@@ -104,6 +106,7 @@ async def test_admin_can_list_dead_letters_and_requeue_failed_job() -> None:
     assert dead_letter_response.status_code == 200
     assert len(dead_letter_response.json()["items"]) == 1
     assert dead_letter_response.json()["items"][0]["job_id"] == job_id
+    assert f"\"args\":[{job_id},\"{handle.worker_token}\"]" in dead_letter_response.json()["items"][0]["payload_json"]
     assert dead_letter_response.json()["items"][0]["error_message"] == "worker crashed"
     assert requeue_response.status_code == 200
     assert requeue_response.json()["accepted"] is True

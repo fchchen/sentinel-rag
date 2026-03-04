@@ -9,6 +9,23 @@ def test_bootstrap_reconciles_new_columns_on_existing_tables() -> None:
     with engine.begin() as connection:
         connection.exec_driver_sql(
             """
+            CREATE TABLE audit_logs (
+                id VARCHAR(36) PRIMARY KEY,
+                tenant_id VARCHAR(36) NOT NULL,
+                app_id VARCHAR(128) NOT NULL,
+                trace_id VARCHAR(36),
+                prompt_hash VARCHAR(64) NOT NULL,
+                redacted_prompt TEXT NOT NULL,
+                response_redacted TEXT,
+                provider VARCHAR(64),
+                model VARCHAR(128),
+                policy_decision VARCHAR(32) NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
             CREATE TABLE document_chunks (
                 id INTEGER PRIMARY KEY,
                 document_id VARCHAR(36) NOT NULL,
@@ -61,12 +78,14 @@ def test_bootstrap_reconciles_new_columns_on_existing_tables() -> None:
     bootstrap_persistence(engine=engine)
 
     inspector = inspect(engine)
+    audit_log_columns = {column["name"] for column in inspector.get_columns("audit_logs")}
     document_chunk_columns = {column["name"] for column in inspector.get_columns("document_chunks")}
     eval_job_columns = {column["name"] for column in inspector.get_columns("eval_jobs")}
     eval_result_columns = {column["name"] for column in inspector.get_columns("eval_results")}
     quota_columns = {column["name"] for column in inspector.get_columns("tenant_quotas")}
 
+    assert {"response_expires_at"} <= audit_log_columns
     assert {"token_count", "keyword_signature", "embedding_json"} <= document_chunk_columns
-    assert {"attempt_count", "max_attempts", "last_error", "next_attempt_at"} <= eval_job_columns
+    assert {"worker_token", "attempt_count", "max_attempts", "last_error", "next_attempt_at"} <= eval_job_columns
     assert {"status", "skip_reason"} <= eval_result_columns
-    assert {"monthly_llm_budget_usd", "monthly_llm_spend_usd", "last_eval_reset_at"} <= quota_columns
+    assert {"monthly_llm_budget_usd", "monthly_llm_spend_usd", "last_eval_reset_at", "month_bucket"} <= quota_columns

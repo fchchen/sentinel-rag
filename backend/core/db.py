@@ -1,14 +1,15 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine, inspect, select, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, bindparam, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from core.config import settings
+from core.crypto import EncryptedText
 
 
 class Base(DeclarativeBase):
@@ -33,8 +34,9 @@ class AuditLog(Base):
     app_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     trace_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    redacted_prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    response_redacted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    redacted_prompt: Mapped[str] = mapped_column(EncryptedText(), nullable=False)
+    response_redacted: Mapped[str | None] = mapped_column(EncryptedText(), nullable=True)
+    response_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     policy_decision: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -159,6 +161,7 @@ class EvalJob(Base):
     retrieval_run_id: Mapped[str] = mapped_column(ForeignKey("retrieval_runs.id"), nullable=False, index=True)
     completion_text: Mapped[str] = mapped_column(Text, nullable=False)
     policy_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    worker_token: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
@@ -202,6 +205,11 @@ class TenantQuota(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+    month_bucket: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc).date().replace(day=1),
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -221,7 +229,7 @@ class ProviderDefinition:
 DEFAULT_PROVIDER_CONFIGS: tuple[ProviderDefinition, ...] = (
     ProviderDefinition(
         provider="azure_openai",
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         priority=1,
         timeout_ms=settings.gateway_default_timeout_ms,
     ),
@@ -233,7 +241,7 @@ DEFAULT_PROVIDER_CONFIGS: tuple[ProviderDefinition, ...] = (
     ),
     ProviderDefinition(
         provider="openai",
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         priority=3,
         timeout_ms=settings.gateway_default_timeout_ms,
     ),
@@ -276,6 +284,23 @@ def reconcile_schema(engine: Engine | None = None) -> None:
             statements.append(
                 "ALTER TABLE document_chunks ADD COLUMN embedding_json TEXT NOT NULL DEFAULT '[]'"
             )
+        if active_engine.dialect.name == "postgresql":
+            statements.append("CREATE EXTENSION IF NOT EXISTS vector")
+            if "embedding_pg" not in existing_columns:
+                statements.append(
+                    "ALTER TABLE document_chunks ADD COLUMN embedding_pg vector(12)"
+                )
+            if "fts_tsv" not in existing_columns:
+                statements.append(
+                    "ALTER TABLE document_chunks ADD COLUMN fts_tsv tsvector"
+                )
+
+    if "audit_logs" in table_names:
+        existing_columns = {column["name"] for column in inspector.get_columns("audit_logs")}
+        if "response_expires_at" not in existing_columns:
+            statements.append(
+                "ALTER TABLE audit_logs ADD COLUMN response_expires_at TIMESTAMP"
+            )
 
     if "eval_results" in table_names:
         existing_columns = {column["name"] for column in inspector.get_columns("eval_results")}
@@ -290,6 +315,10 @@ def reconcile_schema(engine: Engine | None = None) -> None:
 
     if "eval_jobs" in table_names:
         existing_columns = {column["name"] for column in inspector.get_columns("eval_jobs")}
+        if "worker_token" not in existing_columns:
+            statements.append(
+                "ALTER TABLE eval_jobs ADD COLUMN worker_token VARCHAR(64)"
+            )
         if "attempt_count" not in existing_columns:
             statements.append(
                 "ALTER TABLE eval_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
@@ -321,6 +350,10 @@ def reconcile_schema(engine: Engine | None = None) -> None:
             statements.append(
                 "ALTER TABLE tenant_quotas ADD COLUMN last_eval_reset_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
             )
+        if "month_bucket" not in existing_columns:
+            statements.append(
+                "ALTER TABLE tenant_quotas ADD COLUMN month_bucket DATE NOT NULL DEFAULT CURRENT_DATE"
+            )
 
     if not statements:
         return
@@ -328,6 +361,21 @@ def reconcile_schema(engine: Engine | None = None) -> None:
     with active_engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+    if active_engine.dialect.name == "postgresql":
+        sync_pgvector_chunk_features(engine=active_engine)
+        with active_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_pg_hnsw "
+                    "ON document_chunks USING hnsw (embedding_pg vector_cosine_ops)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_chunks_fts_tsv "
+                    "ON document_chunks USING gin (fts_tsv)"
+                )
+            )
 
 
 def bootstrap_schema(engine: Engine | None = None) -> None:
@@ -338,12 +386,21 @@ def bootstrap_schema(engine: Engine | None = None) -> None:
 def seed_provider_configs(engine: Engine | None = None) -> None:
     active_engine = engine or get_engine()
     with Session(active_engine) as session:
-        existing = {
-            config.provider
+        existing_rows = {
+            config.provider: config
             for config in session.execute(select(ProviderConfig)).scalars().all()
         }
         for definition in DEFAULT_PROVIDER_CONFIGS:
-            if definition.provider in existing:
+            existing = existing_rows.get(definition.provider)
+            if existing is not None:
+                # Upgrade previously seeded Azure/OpenAI defaults from the retired gpt-4o-mini
+                # name without clobbering unrelated custom provider choices.
+                if (
+                    definition.model == "gpt-4.1-mini"
+                    and existing.model == "gpt-4o-mini"
+                    and existing.provider in {"azure_openai", "openai"}
+                ):
+                    existing.model = definition.model
                 continue
             session.add(
                 ProviderConfig(
@@ -380,3 +437,40 @@ def load_provider_configs(engine: Engine | None = None) -> Sequence[ProviderDefi
         )
         for row in rows
     )
+
+
+def sync_pgvector_chunk_features(
+    engine: Engine | None = None,
+    *,
+    document_id: str | None = None,
+) -> None:
+    active_engine = engine or get_engine()
+    if active_engine.dialect.name != "postgresql":
+        return
+
+    clause = ""
+    params: dict[str, object] = {}
+    if document_id is not None:
+        clause = " WHERE document_id = :document_id"
+        params["document_id"] = document_id
+
+    with active_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE document_chunks "
+                "SET embedding_pg = CASE "
+                "WHEN embedding_json IS NULL OR embedding_json = '[]' THEN NULL "
+                "ELSE CAST(embedding_json AS vector) "
+                "END"
+                f"{clause}"
+            ),
+            params,
+        )
+        connection.execute(
+            text(
+                "UPDATE document_chunks "
+                "SET fts_tsv = to_tsvector('simple', coalesce(content_text, '') || ' ' || coalesce(keyword_signature, ''))"
+                f"{clause}"
+            ),
+            params,
+        )

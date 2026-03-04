@@ -33,6 +33,7 @@ def upgrade() -> None:
         sa.Column("prompt_hash", sa.String(length=64), nullable=False),
         sa.Column("redacted_prompt", sa.Text(), nullable=False),
         sa.Column("response_redacted", sa.Text(), nullable=True),
+        sa.Column("response_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("provider", sa.String(length=64), nullable=True),
         sa.Column("model", sa.String(length=128), nullable=True),
         sa.Column("policy_decision", sa.String(length=32), nullable=False),
@@ -138,6 +139,7 @@ def upgrade() -> None:
         sa.Column("retrieval_run_id", sa.String(length=36), nullable=False),
         sa.Column("completion_text", sa.Text(), nullable=False),
         sa.Column("policy_decision", sa.String(length=32), nullable=False),
+        sa.Column("worker_token", sa.String(length=64), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("attempt_count", sa.Integer(), nullable=False),
         sa.Column("max_attempts", sa.Integer(), nullable=False),
@@ -150,6 +152,7 @@ def upgrade() -> None:
     op.create_index("ix_eval_jobs_tenant_id", "eval_jobs", ["tenant_id"])
     op.create_index("ix_eval_jobs_audit_log_id", "eval_jobs", ["audit_log_id"])
     op.create_index("ix_eval_jobs_retrieval_run_id", "eval_jobs", ["retrieval_run_id"])
+    op.create_index("ix_eval_jobs_worker_token", "eval_jobs", ["worker_token"])
     op.create_table(
         "eval_dead_letters",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -172,6 +175,7 @@ def upgrade() -> None:
         sa.Column("eval_sample_pct", sa.Integer(), nullable=False),
         sa.Column("force_eval_relevance_threshold", sa.Float(), nullable=False),
         sa.Column("last_eval_reset_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("month_bucket", sa.Date(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
 
@@ -183,6 +187,7 @@ def downgrade() -> None:
     op.drop_index("ix_eval_jobs_retrieval_run_id", table_name="eval_jobs")
     op.drop_index("ix_eval_jobs_audit_log_id", table_name="eval_jobs")
     op.drop_index("ix_eval_jobs_tenant_id", table_name="eval_jobs")
+    op.drop_index("ix_eval_jobs_worker_token", table_name="eval_jobs")
     op.drop_table("eval_jobs")
     op.drop_index("ix_eval_results_retrieval_run_id", table_name="eval_results")
     op.drop_index("ix_eval_results_audit_log_id", table_name="eval_results")

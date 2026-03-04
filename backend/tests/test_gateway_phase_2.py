@@ -22,7 +22,7 @@ async def test_routes_to_azure_openai_by_default() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider"] == "azure_openai"
-    assert payload["model"] == "gpt-4o-mini"
+    assert payload["model"] == "gpt-4.1-mini"
     assert payload["completion"].startswith("stubbed:azure_openai")
 
 
@@ -61,6 +61,24 @@ async def test_all_providers_fail_raises_503_not_500() -> None:
     )
 
     assert response.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_unknown_provider_returns_422_not_500() -> None:
+    response = await request(
+        "POST",
+        "/api/v1/gateway/complete",
+        headers=auth_headers(roles=["reader"]),
+        json_body={
+            "prompt": "Summarize the latest retrieval batch",
+            "provider": "gcp",
+            "max_tokens": 200,
+            "context": {"tenant_id": TENANT_A, "app_id": "console", "trace_id": str(uuid4())},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unsupported provider"
 
 
 @pytest.mark.anyio

@@ -6,10 +6,18 @@ class _FakeAsyncResult:
         self.id = task_id
 
 
+class _FakeEvaluationService:
+    def get_dispatch_handle(self, *, job_id: int):
+        from core.evaluation import EvalJobDispatchHandle
+
+        return EvalJobDispatchHandle(job_id=job_id, worker_token="worker-token")
+
+
 def test_celery_eval_worker_returns_task_metadata_for_single_job() -> None:
     worker = CeleryEvalWorker(
-        submit_job=lambda job_id: _FakeAsyncResult(f"job-{job_id}"),
+        submit_job=lambda job_id, worker_token: _FakeAsyncResult(f"job-{job_id}"),
         submit_pending=lambda limit: _FakeAsyncResult(f"pending-{limit}"),
+        evaluation_service=_FakeEvaluationService(),
     )
 
     result = worker.dispatch_job(41)
@@ -22,8 +30,9 @@ def test_celery_eval_worker_returns_task_metadata_for_single_job() -> None:
 
 def test_celery_eval_worker_returns_task_metadata_for_pending_batch() -> None:
     worker = CeleryEvalWorker(
-        submit_job=lambda job_id: _FakeAsyncResult(f"job-{job_id}"),
+        submit_job=lambda job_id, worker_token: _FakeAsyncResult(f"job-{job_id}"),
         submit_pending=lambda limit: _FakeAsyncResult(f"pending-{limit}"),
+        evaluation_service=_FakeEvaluationService(),
     )
 
     result = worker.dispatch_pending(limit=5)

@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
 from itertools import zip_longest
@@ -6,8 +8,21 @@ from sqlalchemy import func
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from core.config import settings
 from core.db import AuditLog, ModelInvocation, PolicyViolation, get_engine
 from core.policy import PolicyDecision
+
+
+@dataclass(frozen=True)
+class AuditLogView:
+    id: str
+    tenant_id: str
+    app_id: str
+    trace_id: str | None
+    provider: str | None
+    model: str | None
+    policy_decision: str
+    created_at: datetime
 
 
 class AuditService:
@@ -30,6 +45,10 @@ class AuditService:
     ) -> str:
         redacted_prompt = decision.redacted_prompt or raw_prompt
         prompt_hash = sha256(raw_prompt.encode("utf-8")).hexdigest()
+        created_at = datetime.now(timezone.utc)
+        response_expires_at = None
+        if response_redacted is not None:
+            response_expires_at = created_at + timedelta(days=settings.audit_response_ttl_days)
 
         with Session(self._engine) as session:
             audit_log = AuditLog(
@@ -39,9 +58,11 @@ class AuditService:
                 prompt_hash=prompt_hash,
                 redacted_prompt=redacted_prompt,
                 response_redacted=response_redacted,
+                response_expires_at=response_expires_at,
                 provider=provider,
                 model=model,
                 policy_decision=decision.decision,
+                created_at=created_at,
             )
             session.add(audit_log)
             session.flush()
@@ -84,6 +105,50 @@ class AuditService:
             session.commit()
             return audit_log.id
 
+    def list_logs(
+        self,
+        *,
+        tenant_id: str,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> list[AuditLogView]:
+        with Session(self._engine) as session:
+            query = session.query(AuditLog).filter(AuditLog.tenant_id == tenant_id)
+            if date_from is not None:
+                query = query.filter(AuditLog.created_at >= date_from)
+            if date_to is not None:
+                query = query.filter(AuditLog.created_at <= date_to)
+            rows = query.order_by(AuditLog.created_at.desc()).all()
+            return [
+                AuditLogView(
+                    id=row.id,
+                    tenant_id=row.tenant_id,
+                    app_id=row.app_id,
+                    trace_id=row.trace_id,
+                    provider=row.provider,
+                    model=row.model,
+                    policy_decision=row.policy_decision,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
+
+    def purge_expired_response_bodies(self, *, now: datetime | None = None) -> int:
+        cutoff = now or datetime.now(timezone.utc)
+        with Session(self._engine) as session:
+            rows = (
+                session.query(AuditLog)
+                .filter(AuditLog.response_redacted.is_not(None))
+                .filter(AuditLog.response_expires_at.is_not(None))
+                .filter(AuditLog.response_expires_at <= cutoff)
+                .all()
+            )
+            for row in rows:
+                row.response_redacted = None
+                row.response_expires_at = None
+            session.commit()
+            return len(rows)
+
     def cost_summary(self, *, tenant_id: str) -> dict[str, object]:
         with Session(self._engine) as session:
             rows = (
@@ -101,7 +166,9 @@ class AuditService:
             return {"total_cost_usd": total_cost, "providers": providers}
 
 PRICING_RATES: dict[tuple[str, str], tuple[float, float]] = {
+    ("azure_openai", "gpt-4.1-mini"): (0.00000015, 0.0000006),
     ("azure_openai", "gpt-4o-mini"): (0.00000015, 0.0000006),
+    ("openai", "gpt-4.1-mini"): (0.00000015, 0.0000006),
     ("openai", "gpt-4o-mini"): (0.00000015, 0.0000006),
     ("anthropic", "claude-3-5-sonnet"): (0.000003, 0.000015),
 }

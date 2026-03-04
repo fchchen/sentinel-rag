@@ -41,18 +41,18 @@ Tests first:
 - [ ] `test_unauthenticated_request_returns_401()`
 - [ ] `test_reader_cannot_delete_document_returns_403()`
 - [ ] `test_admin_can_delete_document()`
-- [ ] `test_service_account_cannot_access_logs()`
-- [ ] `test_tenant_isolation_reader_cannot_see_other_tenant_logs()`
+- [x] `test_service_account_cannot_access_logs()`
+- [x] `test_tenant_isolation_reader_cannot_see_other_tenant_logs()`
 - [ ] `test_policy_override_requires_admin_role_and_justification()`
 - [ ] `test_token_expiry_returns_401_not_500()`
 
 ### Phase 2: Gateway Router
 
 - [ ] Add request and response schemas
-- [ ] Integrate LiteLLM provider abstraction
-- [ ] Add provider config model
-- [ ] Implement Redis-backed circuit-breaker state
-- [ ] Implement fallback routing and 503 exhaustion handling
+- [x] Integrate LiteLLM provider abstraction
+- [x] Add provider config model
+- [x] Implement Redis-backed circuit-breaker state
+- [x] Implement fallback routing and 503 exhaustion handling
 - [ ] Add SSE streaming endpoint contract
 
 Tests first:
@@ -106,10 +106,10 @@ Tests first:
 ### Phase 4: RAG Pipeline
 
 - [ ] Define document upload contract and validation rules
-- [ ] Add chunking, embedding, and hybrid retrieval services
-- [ ] Persist retrieval runs and retrieval results
-- [ ] Add document scan lifecycle states
-- [ ] Exclude non-`ACTIVE` documents from indexing and retrieval
+- [x] Add chunking, embedding, and hybrid retrieval services
+- [x] Persist retrieval runs and retrieval results
+- [x] Add document scan lifecycle states
+- [x] Exclude non-`ACTIVE` documents from indexing and retrieval
 - [ ] Add citation formatting in gateway responses
 
 Tests first:
@@ -134,11 +134,11 @@ Tests first:
 
 ### Phase 5: Audit Logging and Retention
 
-- [ ] Add audit log persistence model
-- [ ] Store hashes for raw-sensitive values instead of plaintext
-- [ ] Add envelope encryption for sensitive persisted fields
-- [ ] Add model invocation tracking
-- [ ] Add retention job and TTL policy
+- [x] Add audit log persistence model
+- [x] Store hashes for raw-sensitive values instead of plaintext
+- [x] Add envelope encryption for sensitive persisted fields
+- [x] Add model invocation tracking
+- [x] Add retention job and TTL policy
 
 Tests first:
 
@@ -150,9 +150,9 @@ Tests first:
 - [ ] `test_ip_stored_as_hash_not_plaintext()`
 - [ ] `test_model_invocations_row_created_per_llm_call()`
 - [ ] `test_cost_usd_calculated_correctly_from_token_count()`
-- [ ] `test_retention_job_deletes_response_logs_after_ttl()`
-- [ ] `test_audit_log_query_filtered_by_tenant_id()`
-- [ ] `test_audit_log_query_filtered_by_date_range()`
+- [x] `test_retention_job_deletes_response_logs_after_ttl()`
+- [x] `test_audit_log_query_filtered_by_tenant_id()`
+- [x] `test_audit_log_query_filtered_by_date_range()`
 
 ### Phase 6: Observability
 
@@ -186,21 +186,22 @@ Tests first:
 - [x] Add task dead-letter persistence for unrecoverable worker failures
 - [x] Add dead-letter read API and failed-job requeue path
 - [x] Reset daily spend at midnight UTC
+- [x] Reset monthly LLM spend at UTC month rollover
 
 Tests first:
 
 - [ ] `test_relevance_scorer_returns_float_0_to_1()`
-- [ ] `test_faithfulness_uses_retrieval_context_not_prompt()`
+- [x] `test_faithfulness_uses_retrieval_context_not_prompt()`
 - [ ] `test_faithfulness_detects_claim_not_in_retrieved_chunks()`
 - [ ] `test_hallucination_flag_set_when_faithfulness_below_threshold()`
-- [ ] `test_judge_prompt_version_stored_with_eval_result()`
+- [x] `test_judge_prompt_version_stored_with_eval_result()`
 - [ ] `test_eval_result_linked_to_retrieval_run_id()`
 - [ ] `test_eval_job_does_not_block_gateway_response()`
 - [ ] `test_eval_cost_tracked_in_model_invocations()`
 - [ ] `test_eval_skipped_when_budget_exceeded()`
 - [ ] `test_eval_always_runs_on_policy_violation_regardless_of_budget()`
-- [ ] `test_eval_always_runs_on_low_relevance_score()`
-- [ ] `test_eval_skipped_when_sampled_out_reason_logged()`
+- [x] `test_eval_always_runs_on_low_relevance_score()`
+- [x] `test_eval_skipped_when_sampled_out_reason_logged()`
 - [ ] `test_eval_spend_incremented_after_judge_call()`
 - [ ] `test_eval_spend_reset_to_zero_at_midnight_utc()`
 - [ ] `test_gateway_429_when_tenant_monthly_budget_exceeded()`

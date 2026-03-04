@@ -173,6 +173,13 @@ Default fallback priority:
 2. `anthropic`
 3. `openai`
 
+Current scaffold runtime:
+
+- The LiteLLM-backed provider client is implemented and uses persisted `provider_configs`, but the default local runtime is `GATEWAY_PROVIDER_MODE=stub` until provider credentials are explicitly configured
+- Tests also run in `GATEWAY_PROVIDER_MODE=stub` so the suite stays offline and deterministic
+- Unsupported provider aliases return `422` instead of throwing uncaught errors
+- LiteLLM provider errors are classified offline before any real cloud use: `429` counts toward breaker state with the longer cooldown, while non-`429` request/auth/content `4xx` errors do not increment the breaker
+
 Behavior when all providers are open:
 
 - Return `503 Service Unavailable`, not `500`
@@ -318,7 +325,7 @@ Malware scanner by environment:
 
 ### Feature 4: Audit Logging, Redaction, and Retention
 
-PII is redacted from both prompt and response before persistence. Sensitive columns use envelope encryption with a Key Vault-managed key. A Celery beat job enforces retention TTL.
+PII is redacted from both prompt and response before persistence. Sensitive columns use envelope encryption at rest. The current implementation wraps per-value data keys with the configured `AUDIT_ENCRYPTION_KEY`; production should source that key from Key Vault-managed material. Response bodies carry a `response_expires_at` TTL, and a Celery beat job (`sentinel_rag.purge_expired_audit_responses`) clears expired persisted response bodies while retaining the audit row metadata.
 
 #### Tests to Write First
 
@@ -360,7 +367,7 @@ Every request carries a `trace_id`. Create spans for API entry, policy check, re
 
 ### Feature 6: Evaluation Harness
 
-Faithfulness is measured against stored retrieval context, not just the prompt. Use GPT-4o as the LLM-as-judge. The queue contract is asynchronous: gateway requests enqueue eval work into `eval_jobs`, and the default runtime dispatches Celery tasks over Redis so a worker can consume those jobs out of band. Tests override that worker with an inline executor to keep the suite isolated, but production no longer evaluates in-request. Judge prompts are versioned under `backend/eval/prompts/`.
+Faithfulness is measured against stored retrieval context, not just the prompt. Use `gpt-4.1-mini` as the default LLM-as-judge. The queue contract is asynchronous: gateway requests enqueue eval work into `eval_jobs`, and the default runtime dispatches Celery tasks over Redis so a worker can consume those jobs out of band. Tests override that worker with an inline executor to keep the suite isolated, but production no longer evaluates in-request. Judge prompts are versioned under `backend/eval/prompts/`.
 
 Operational queue behavior in the scaffold:
 
@@ -373,6 +380,7 @@ Operational queue behavior in the scaffold:
 - Operators can inspect queued and failed jobs through `GET /api/v1/evals/jobs`
 - Operators can inspect unrecoverable task failures through `GET /api/v1/evals/dead-letters`
 - Failed jobs can be manually replayed through `POST /api/v1/evals/jobs/{job_id}/requeue`
+- Worker-side job execution and failure mutation now use an opaque per-job worker token in addition to `job_id`, so internal task handlers do not mutate eval jobs by bare integer ID alone
 
 #### Cost Control and Sampling (Addendum A5)
 
@@ -411,6 +419,8 @@ Current scaffold behavior:
 - Gateway requests now return `429 Too Many Requests` when tenant monthly spend is already at or above the configured monthly budget
 - Monthly spend is incremented after each successful model invocation using the same provider/model pricing table used for `model_invocations`
 - Daily eval spend resets lazily on the first quota read after a UTC date rollover via `last_eval_reset_at`
+- Monthly spend resets lazily on the first quota read in a new UTC month via `month_bucket`
+- Worker execution now uses a prompt-based judge runner keyed by the versioned file under `backend/eval/prompts/`; local mode is deterministic, but the queue path and prompt contract are the same ones a real judge provider would use
 
 #### Judge Prompt Versioning
 

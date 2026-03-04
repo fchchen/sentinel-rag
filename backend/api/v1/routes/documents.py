@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm.exc import NoResultFound
 
 from core.auth import AuthContext, Role, get_auth_context, require_role
 from core.documents import DocumentView, get_document_service
@@ -78,7 +79,9 @@ async def apply_scan_result(
             result=payload.result,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except NoResultFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found") from exc
     return _to_response(document)
 
 

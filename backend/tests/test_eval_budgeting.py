@@ -74,3 +74,16 @@ def test_daily_eval_spend_resets_after_midnight_utc() -> None:
     quota = service.get_quota(tenant_id="tenant-a", now="2026-03-03T00:01:00+00:00")
 
     assert quota.daily_eval_spend_usd == 0.0
+
+
+def test_monthly_llm_spend_resets_when_utc_month_rolls_over() -> None:
+    service = _service()
+    service.upsert_quota(
+        tenant_id="tenant-a",
+        monthly_llm_spend_usd=9.0,
+        month_bucket="2026-02-01",
+    )
+
+    quota = service.get_quota(tenant_id="tenant-a", now="2026-03-01T00:01:00+00:00")
+
+    assert quota.monthly_llm_spend_usd == 0.0

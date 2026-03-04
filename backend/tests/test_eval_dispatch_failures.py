@@ -60,7 +60,7 @@ def test_broker_dispatch_failure_marks_job_for_retry() -> None:
     )
 
     worker = CeleryEvalWorker(
-        submit_job=lambda job_id: (_ for _ in ()).throw(OperationalError("redis down")),
+        submit_job=lambda job_id, worker_token: (_ for _ in ()).throw(OperationalError("redis down")),
         submit_pending=lambda limit: (_ for _ in ()).throw(OperationalError("redis down")),
         evaluation_service=service,
     )

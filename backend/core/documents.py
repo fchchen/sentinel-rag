@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.orm import Session
 
-from core.db import Document, DocumentChunk, bootstrap_schema, get_engine
+from core.db import Document, DocumentChunk, bootstrap_schema, get_engine, sync_pgvector_chunk_features
 from core.embeddings import build_chunks
 
 
@@ -55,6 +56,7 @@ class DocumentService:
                     )
                 )
             session.commit()
+            sync_pgvector_chunk_features(engine=self._engine, document_id=document.id)
             session.refresh(document)
             return self._to_view(document)
 
@@ -96,8 +98,10 @@ class DocumentService:
             row = (
                 session.query(Document)
                 .filter(Document.id == document_id, Document.tenant_id == tenant_id)
-                .one()
+                .one_or_none()
             )
+            if row is None:
+                raise NoResultFound("Document not found")
             row.status = status_map[result]
             session.commit()
             session.refresh(row)

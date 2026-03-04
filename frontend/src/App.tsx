@@ -59,6 +59,7 @@ type EvalDeadLetterItem = {
   id: number;
   job_id: number | null;
   task_name: string;
+  payload_json: string;
   error_message: string;
   retry_count: number;
   created_at: string;
@@ -141,6 +142,7 @@ const fallbackDeadLetters: EvalDeadLetterItem[] = [
     id: 1,
     job_id: 11,
     task_name: "sentinel_rag.process_eval_job",
+    payload_json: "{\"job_id\":11,\"args\":[11],\"kwargs\":{}}",
     error_message: "worker crashed",
     retry_count: 2,
     created_at: "2026-03-03T18:02:00Z",
@@ -155,6 +157,9 @@ export default function App() {
   const [evalJobs, setEvalJobs] = useState<EvalJobItem[]>(fallbackEvalJobs);
   const [deadLetters, setDeadLetters] = useState<EvalDeadLetterItem[]>(fallbackDeadLetters);
   const [costs, setCosts] = useState<CostSummary>(fallbackCosts);
+  const [expandedDeadLetterId, setExpandedDeadLetterId] = useState<number | null>(null);
+  const [requeueingJobId, setRequeueingJobId] = useState<number | null>(null);
+  const [operatorMessage, setOperatorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadDashboard();
@@ -274,6 +279,49 @@ export default function App() {
     return (await response.json()) as Viewer;
   }
 
+  async function requeueDeadLetter(item: EvalDeadLetterItem): Promise<void> {
+    if (!item.job_id) {
+      setOperatorMessage("Dead letter has no linked job to requeue.");
+      return;
+    }
+
+    setRequeueingJobId(item.job_id);
+    setOperatorMessage(null);
+
+    try {
+      const token = await getOrCreateDemoToken();
+      if (!token) {
+        setOperatorMessage("Authentication unavailable for requeue.");
+        return;
+      }
+
+      const response = await fetch(`/api/v1/evals/jobs/${item.job_id}/requeue`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        setOperatorMessage(`Requeue failed (${response.status}).`);
+        return;
+      }
+
+      const payload = (await response.json()) as { accepted: boolean; queued: boolean };
+      if (!payload.accepted) {
+        setOperatorMessage(`Job ${item.job_id} was not eligible for requeue.`);
+        return;
+      }
+
+      setOperatorMessage(
+        payload.queued
+          ? `Job ${item.job_id} requeued and dispatched.`
+          : `Job ${item.job_id} requeued for inline processing.`,
+      );
+      await loadDashboard();
+    } finally {
+      setRequeueingJobId(null);
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -306,8 +354,8 @@ export default function App() {
       <section className="notes">
         <h2>Next build targets</h2>
         <ul>
-          <li>Add operator actions for dead-letter replay and review.</li>
-          <li>Swap heuristic embeddings for pgvector-backed chunk vectors.</li>
+          <li>Swap heuristic embeddings for model-backed production vectors.</li>
+          <li>Replace heuristic eval scoring with async LLM-as-judge execution.</li>
           <li>Add operator actions for scan retries and document quarantine review.</li>
         </ul>
       </section>
@@ -399,16 +447,44 @@ export default function App() {
             <p className="panel-eyebrow">Failures</p>
             <h2>Dead Letters</h2>
           </div>
+          {operatorMessage ? <p className="panel-message">{operatorMessage}</p> : null}
           <div className="list-shell">
             {deadLetters.map((item) => (
-              <div className="list-row" key={item.id}>
-                <div>
-                  <p className="list-title">{item.task_name}</p>
-                  <p className="list-meta">
-                    Job {item.job_id ?? "n/a"} · {item.error_message}
-                  </p>
+              <div className="list-row dead-letter-row" key={item.id}>
+                <div className="dead-letter-copy">
+                  <div>
+                    <p className="list-title">{item.task_name}</p>
+                    <p className="list-meta">
+                      Job {item.job_id ?? "n/a"} · {item.error_message}
+                    </p>
+                    <p className="list-meta">{new Date(item.created_at).toLocaleString()}</p>
+                  </div>
+                  {expandedDeadLetterId === item.id ? (
+                    <pre className="payload-preview">{formatPayload(item.payload_json)}</pre>
+                  ) : null}
                 </div>
-                <span className="result-count">retry {item.retry_count}</span>
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() =>
+                      setExpandedDeadLetterId((current) => (current === item.id ? null : item.id))
+                    }
+                  >
+                    {expandedDeadLetterId === item.id ? "Hide payload" : "Review payload"}
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button action-button-primary"
+                    disabled={!item.job_id || requeueingJobId === item.job_id}
+                    onClick={() => {
+                      void requeueDeadLetter(item);
+                    }}
+                  >
+                    {requeueingJobId === item.job_id ? "Requeueing..." : "Requeue"}
+                  </button>
+                  <span className="result-count">retry {item.retry_count}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -451,4 +527,12 @@ function evalJobStatusClass(status: string): string {
     return "status-quarantined";
   }
   return "status-pending";
+}
+
+function formatPayload(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }

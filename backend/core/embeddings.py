@@ -64,6 +64,10 @@ def serialize_embedding(vector: tuple[float, ...]) -> str:
     return json.dumps(vector, separators=(",", ":"))
 
 
+def to_pgvector_literal(vector: tuple[float, ...]) -> str:
+    return "[" + ",".join(f"{value:.6f}" for value in vector) + "]"
+
+
 def deserialize_embedding(raw: str) -> tuple[float, ...]:
     values = json.loads(raw)
     return tuple(float(value) for value in values)
